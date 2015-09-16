@@ -1,0 +1,22 @@
+{
+  "name": "message-center-transport-spi-slave",
+  "version": "0.0.0",
+  "description": "SPI slave transport layer for the Message Center.",
+  "keywords": [],
+  "author": "Marcus Chang <marcus.chang@arm.com>",
+  "repository": {
+    "url": "git@github.com:ARMmbed/message-center-transport-spi-slave.git",
+    "type": "git"
+  },
+  "homepage": "https://github.com/ARMmbed/message-center-transport-spi-slave",
+  "licenses": [
+    {
+      "url": "https://spdx.org/licenses/Apache-2.0",
+      "type": "Apache-2.0"
+    }
+  ],
+  "dependencies": {
+    "mbed-block": "~0.2.3",
+    "spis-nrf51": "~0.3.0"
+  }
+}
