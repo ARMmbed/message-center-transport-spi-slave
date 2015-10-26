@@ -17,11 +17,8 @@
 
 #include "message-center-transport/MessageCenterSPISlave.h"
 
-/*  Native SPI Slave driver from Nordic SDK 8.1
-*/
-extern "C" {
-#include "spis-nrf51/spi_slave.h"
-}
+#include "core-util/CriticalSectionLock.h"
+
 
 #define VERBOSE_DEBUG_OUTPUT 0
 
@@ -29,21 +26,6 @@ extern "C" {
 #define DEBUG_OUT(...) { printf(__VA_ARGS__); }
 #else
 #define DEBUG_OUT(...) /* nothing */
-#endif
-
-
-#if defined(TARGET_LIKE_WATCH_BLE_NRF51)
-#define SPIS_MOSI_PIN  SPIS_MOSI    // SPI MOSI signal.
-#define SPIS_MISO_PIN  SPIS_MISO    // SPI MISO signal.
-#define SPIS_SCK_PIN   SPIS_SCK     // SPI SCK signal.
-#define SPIS_CSN_PIN   SPIS_CSN     // SPI CSN signal.
-#define SPIS_IRQ_PIN   SPIS_NRDY    // IRQ signal.
-#else
-#define SPIS_MOSI_PIN  P0_1    // SPI MOSI signal.
-#define SPIS_MISO_PIN  P0_2    // SPI MISO signal.
-#define SPIS_SCK_PIN   P0_3    // SPI SCK signal.
-#define SPIS_CSN_PIN   P0_4    // SPI CSN signal.
-#define SPIS_IRQ_PIN   P0_5    // IRQ signal.
 #endif
 
 #define DEF_CHARACTER 0xFF             /**< SPI default character. Character clocked out in case of an ignored transaction. */
@@ -69,9 +51,6 @@ static void bridgeEventHandlerIRQ(spi_slave_evt_t event)
     {
         case SPI_SLAVE_BUFFERS_SET_DONE:
             {
-                FunctionPointer1<void, const char*> fp(bridge, &MessageCenterSPISlave::printTask);
-                minar::Scheduler::postCallback(fp.bind("Buffers set, SPI ready\r\n"));
-
                 if (bridge)
                 {
                     minar::Scheduler::postCallback(bridge, &MessageCenterSPISlave::transferArmedTask);
@@ -81,9 +60,6 @@ static void bridgeEventHandlerIRQ(spi_slave_evt_t event)
 
         case SPI_SLAVE_XFER_DONE:
             {
-                FunctionPointer1<void, const char*> fp(bridge, &MessageCenterSPISlave::printTask);
-                minar::Scheduler::postCallback(fp.bind("Transfer done, SPI ready\r\n"));
-
                 if (bridge)
                 {
                     FunctionPointer2<void, uint32_t, uint32_t> fp(bridge, &MessageCenterSPISlave::transferDoneTask);
@@ -113,12 +89,13 @@ static void bridgeEventHandlerIRQ(spi_slave_evt_t event)
 /* Constructor                                                               */
 /*****************************************************************************/
 
-MessageCenterSPISlave::MessageCenterSPISlave()
-    :   irqPin(SPIS_IRQ_PIN),
+MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName cs, PinName irq)
+:       csPin(cs),
+        irqPin(irq),
         state(STATE_IDLE),
-        sendFlag(false),
         callbackSend(),
-        callbackReceive()
+        callbackReceive(),
+        sendBlock(NULL)
 {
     // default high, active low
     irqPin = 1;
@@ -129,6 +106,7 @@ MessageCenterSPISlave::MessageCenterSPISlave()
     // register event handler
     spi_slave_evt_handler_register(bridgeEventHandlerIRQ);
 
+#if 0
     // setup configuration struct and register with device
     spi_slave_config_t spi_slave_config = {
         .pin_miso         = SPIS_MISO_PIN,
@@ -140,8 +118,15 @@ MessageCenterSPISlave::MessageCenterSPISlave()
         .def_tx_character = DEF_CHARACTER,
         .orc_tx_character = ORC_CHARACTER
     };
+#endif
 
-    spi_slave_init(&spi_slave_config);
+    config.pin_csn          = cs;
+    config.mode             = SPI_MODE_0;
+    config.bit_order        = SPIM_MSB_FIRST;
+    config.def_tx_character = DEF_CHARACTER;
+    config.orc_tx_character = ORC_CHARACTER;
+
+    spi_slave_init(&config);
 
     // clear tx buffer
     cmdTxBuffer[0] = ORC_CHARACTER;
@@ -160,24 +145,65 @@ MessageCenterSPISlave::MessageCenterSPISlave()
 
 bool MessageCenterSPISlave::internalSendTask(BlockStatic* block)
 {
+    DigitalIn cs(csPin);
 
-#if 0
-    // check length is set correctly
-    uint32_t length = block->getLength();
-    length = (length <= SPIS_MESSAGE_SIZE) ? length : SPIS_MESSAGE_SIZE;
-    block->at(0) = length;
+    bool result = false;
 
-    sendFlag = true;
+    if (block)
+    {
+        // begin critical section
+        {
+            CriticalSectionLock lock;
 
-    // re-arm buffer with the correct length
-    spi_slave_buffers_set(block->getData(), m_rx_buf, length, SPIS_MESSAGE_SIZE);
+            if ((state == STATE_IDLE) &&
+                (cs == 1))
+            {
+                // set new state
+                state = STATE_SEND_ARM_COMMAND;
 
-    // signal update
-    minar::Scheduler::postCallback(this, &MessageCenterSPISlave::internalIRQSet);
-#endif
-    return false;
+                // signal SPI master that slave has control
+                irqPin = 0;
+
+                // SPI acquired successfully
+                result = true;
+            }
+        }
+        // end critical section
+
+        //
+        if (result)
+        {
+            // check and set length
+            uint32_t length = block->getLength();
+
+            if (length > SPIS_MAX_MESSAGE_SIZE)
+            {
+                length = SPIS_MAX_MESSAGE_SIZE;
+            }
+
+            // store pointer
+            sendBlock = block;
+
+            // send read command to master
+            FunctionPointer1<void, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
+            minar::Scheduler::postCallback(fp.bind(length));
+        }
+    }
+
+    return result;
 }
 
+void MessageCenterSPISlave::sendCommandTask(uint32_t length)
+{
+    // construct send command
+    cmdTxBuffer[0] = length;
+    cmdTxBuffer[1] = length >> 8;
+    cmdTxBuffer[2] = length >> 16;
+    cmdTxBuffer[3] = length >> 24;
+
+    // arm buffer
+    spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, SPIS_COMMAND_SIZE, SPIS_COMMAND_SIZE);
+}
 
 /*****************************************************************************/
 /* Event handlers                                                            */
@@ -192,17 +218,26 @@ bool MessageCenterSPISlave::internalSendTask(BlockStatic* block)
 */
 void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLength)
 {
-    DEBUG_OUT("MC: %lu %lu\r\n", txLength, rxLength);
+    // Master has just read the command from the Slave
+    if ((state == STATE_SEND_COMMAND) && (txLength > 0))
+    {
+        state = STATE_SEND_ARM_MESSAGE;
 
-    if ((state == STATE_IDLE) && (rxLength > 0))
+        // re-arm buffers
+        spi_slave_buffers_set(sendBlock->getData(), cmdRxBuffer, sendBlock->getLength(), SPIS_COMMAND_SIZE);
+    }
+    // Master has just read the message from the Slave
+    else if ((state == STATE_SEND_MESSAGE) && (rxLength > 0))
+    {
+        state = STATE_SEND_ARM_DONE;
+
+        // re-arm buffers
+        spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
+    }
+    // Slave has just received command from Master
+    else if ((state == STATE_IDLE) && (rxLength > 0))
     {
         state = STATE_RECEIVE_ARMING;
-
-        for (std::size_t idx = 0; idx < SPIS_COMMAND_SIZE; idx++)
-        {
-            DEBUG_OUT("%02X", cmdRxBuffer[idx]);
-        }
-        DEBUG_OUT("\r\n");
 
         // setup rx buffer
         uint32_t length;
@@ -214,12 +249,14 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         uint8_t* rxBuffer = (uint8_t*) malloc(length);
         receiveBlock = SharedPointer<Block>(new BlockDynamic(rxBuffer, length));
 
+        // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, rxBuffer, 1, length);
     }
+    // Slave has just received message from Master
     else if ((state == STATE_RECEIVE_READY) && (rxLength > 0))
     {
         // receive complete
-        state = STATE_RECEIVE_REARM;
+        state = STATE_IDLE_ARM;
 
         // post received block
         if (callbackReceive)
@@ -230,18 +267,18 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         // clear reference to shared block
         receiveBlock = SharedPointer<Block>();
 
-        // re-arm
+        // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
     }
+    // Unknown state, reset to known state
     else
     {
-        // unknown state reset
         state = STATE_IDLE;
 
         // clear tx buffer
         cmdTxBuffer[0] = ORC_CHARACTER;
 
-        // re-arm
+        // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
     }
 }
@@ -251,16 +288,42 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
 */
 void MessageCenterSPISlave::transferArmedTask()
 {
-    if (state == STATE_RECEIVE_ARMING)
+    if (state == STATE_SEND_ARM_COMMAND)
+    {
+        state = STATE_SEND_COMMAND;
+
+        // signal master, SPI slave has command to be read
+        irqPin = 1;
+    }
+    else if (state == STATE_SEND_ARM_MESSAGE)
+    {
+        state = STATE_SEND_MESSAGE;
+
+        // signal master, SPI slave has message to be read
+        irqPin = 0;
+    }
+    // Master has read message, and buffers have been rearmed.
+    // Signal send done callback.
+    else if (state == STATE_SEND_ARM_DONE)
+    {
+        state = STATE_IDLE;
+
+        if (callbackSend)
+        {
+            minar::Scheduler::postCallback(callbackSend);
+        }
+
+        // signal master, SPI slave is ready for next command
+        irqPin = 1;
+    }
+    else if (state == STATE_RECEIVE_ARMING)
     {
         state = STATE_RECEIVE_READY;
-
-        DEBUG_OUT("armed\r\n");
 
         // signal master, SPI slave is ready to be read
         irqPin = 0;
     }
-    else if (state == STATE_RECEIVE_REARM)
+    else if (state == STATE_IDLE_ARM)
     {
         // re-arm done, ready for next command
         state = STATE_IDLE;
@@ -280,32 +343,3 @@ void MessageCenterSPISlave::printTask(const char* str)
     DEBUG_OUT("spis: %s", str);
 }
 
-#if 0
-
-    uint8_t length = m_rx_buf[0];
-
-    // first byte is length; it is non-zero if data was written
-    if (length != 0)
-    {
-        m_rx_buf[0] = 0;
-
-        SharedPointer<Block> data(new BlockDynamic(length));
-        data->memcpy(0, &m_rx_buf[1], length);
-
-        minar::Scheduler::postCallback(callbackReceive.bind(data));
-    }
-
-    if (sendFlag)
-    {
-        // send done
-        // reset transmit and receive buffers to default
-        spi_slave_buffers_set(m_tx_buf, m_rx_buf, 0, SPIS_MESSAGE_SIZE);
-
-        // call callback function
-        minar::Scheduler::postCallback(callbackSend);
-    }
-
-    // reset transmit and receive buffers to default
-    spi_slave_buffers_set(m_tx_buf, m_rx_buf, 0, SPIS_MESSAGE_SIZE);
-}
-#endif

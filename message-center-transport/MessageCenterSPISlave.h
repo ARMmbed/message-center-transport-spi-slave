@@ -35,7 +35,7 @@ using namespace mbed::util;
 class MessageCenterSPISlave
 {
 public:
-    MessageCenterSPISlave();
+    MessageCenterSPISlave(spi_slave_config_t& config, PinName cs, PinName irq);
 
     /*  Send data block.
     */
@@ -83,25 +83,34 @@ public:
 
 private:
 
+    PinName    csPin;
     DigitalOut irqPin;
 
     typedef enum {
         STATE_IDLE,
+        STATE_IDLE_ARM,
+        STATE_SEND_ARM_COMMAND,
+        STATE_SEND_COMMAND,
+        STATE_SEND_ARM_MESSAGE,
+        STATE_SEND_MESSAGE,
+        STATE_SEND_ARM_DONE,
         STATE_RECEIVE_ARMING,
-        STATE_RECEIVE_READY,
-        STATE_RECEIVE_REARM,
-        STATE_SEND
+        STATE_RECEIVE_READY
     } state_t;
 
     state_t state;
 
     bool internalSendTask(BlockStatic* block);
 
-    bool sendFlag;
-    FunctionPointer                                 callbackSend;
+    void sendCommandTask(uint32_t length);
+
+
+
+    FunctionPointer0<void>                          callbackSend;
     FunctionPointer1<void, SharedPointer<Block> >   callbackReceive;
 
     SharedPointer<Block> receiveBlock;
+    BlockStatic* sendBlock;
 };
 
 #endif // __MESSAGE_CENTER_SPI_SLAVE_H__
