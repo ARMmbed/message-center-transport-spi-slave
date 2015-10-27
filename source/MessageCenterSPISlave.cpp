@@ -32,7 +32,7 @@
 #define ORC_CHARACTER 0xEE             /**< SPI over-read character. Character clocked out after an over-read of the transmit buffer. */
 
 #define SPIS_MAX_MESSAGE_SIZE 0xFF
-#define SPIS_COMMAND_SIZE 0x04
+#define SPIS_COMMAND_SIZE 0x06
 static uint8_t cmdTxBuffer[SPIS_COMMAND_SIZE] = {0};
 static uint8_t cmdRxBuffer[SPIS_COMMAND_SIZE] = {0};
 
@@ -93,8 +93,7 @@ MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName
 :       csPin(cs),
         irqPin(irq),
         state(STATE_IDLE),
-        callbackSend(),
-        callbackReceive(),
+        callbackPort(0),
         sendBlock(NULL)
 {
     // default high, active low
@@ -143,7 +142,7 @@ MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName
 /* Send                                                                      */
 /*****************************************************************************/
 
-bool MessageCenterSPISlave::internalSendTask(BlockStatic* block)
+bool MessageCenterSPISlave::internalSendTask(uint16_t port, BlockStatic* block)
 {
     DigitalIn cs(csPin);
 
@@ -185,21 +184,24 @@ bool MessageCenterSPISlave::internalSendTask(BlockStatic* block)
             sendBlock = block;
 
             // send read command to master
-            FunctionPointer1<void, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
-            minar::Scheduler::postCallback(fp.bind(length));
+            FunctionPointer2<void, uint16_t, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
+            minar::Scheduler::postCallback(fp.bind(port, length));
         }
     }
 
     return result;
 }
 
-void MessageCenterSPISlave::sendCommandTask(uint32_t length)
+void MessageCenterSPISlave::sendCommandTask(uint16_t port, uint32_t length)
 {
     // construct send command
     cmdTxBuffer[0] = length;
     cmdTxBuffer[1] = length >> 8;
     cmdTxBuffer[2] = length >> 16;
     cmdTxBuffer[3] = length >> 24;
+
+    cmdTxBuffer[4] = port;
+    cmdTxBuffer[5] = port >> 8;
 
     // arm buffer
     spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, SPIS_COMMAND_SIZE, SPIS_COMMAND_SIZE);
@@ -239,13 +241,18 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
     {
         state = STATE_RECEIVE_ARMING;
 
-        // setup rx buffer
+        // get length
         uint32_t length;
         length = cmdRxBuffer[3];
-        length = length << 8 | cmdRxBuffer[2];
-        length = length << 8 | cmdRxBuffer[1];
-        length = length << 8 | cmdRxBuffer[0];
+        length = (length << 8) | cmdRxBuffer[2];
+        length = (length << 8) | cmdRxBuffer[1];
+        length = (length << 8) | cmdRxBuffer[0];
 
+        // store port
+        callbackPort = cmdRxBuffer[5];
+        callbackPort = (callbackPort << 8) | cmdRxBuffer[4];
+
+        // setup rx buffer
         uint8_t* rxBuffer = (uint8_t*) malloc(length);
         receiveBlock = SharedPointer<Block>(new BlockDynamic(rxBuffer, length));
 
@@ -261,7 +268,7 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         // post received block
         if (callbackReceive)
         {
-            minar::Scheduler::postCallback(callbackReceive.bind(receiveBlock));
+            minar::Scheduler::postCallback(callbackReceive.bind(callbackPort, receiveBlock));
         }
 
         // clear reference to shared block

@@ -19,6 +19,8 @@
 
 #include "mbed-drivers/mbed.h"
 
+#include "message-center-transport/MessageCenterTransport.h"
+
 #include "mbed-block/BlockStatic.h"
 #include "mbed-block/BlockDynamic.h"
 #include "core-util/SharedPointer.h"
@@ -32,50 +34,12 @@ extern "C" {
 using namespace mbed::util;
 
 
-class MessageCenterSPISlave
+class MessageCenterSPISlave : public MessageCenterTransport
 {
 public:
     MessageCenterSPISlave(spi_slave_config_t& config, PinName cs, PinName irq);
 
-    /*  Send data block.
-    */
-    bool sendTask(BlockStatic* block, void (*_callback)(void))
-    {
-        bool result = internalSendTask(block);
-
-        if (result)
-        {
-            callbackSend.attach(_callback);
-        }
-
-        return result;
-    }
-
-    template <typename T>
-    bool sendTask(BlockStatic* block, T* object, void (T::*_callback)(void))
-    {
-        bool result = internalSendTask(block);
-
-        if (result)
-        {
-            callbackSend.attach(object, _callback);
-        }
-
-        return result;
-    }
-
-    /*  Register receive callback. */
-    void onReceiveTask(void (*callback)(SharedPointer<Block> block))
-    {
-        callbackReceive.attach(callback);
-    }
-
-    template <typename T>
-    void onReceiveTask(T* object, void (T::*callback)(SharedPointer<Block> block))
-    {
-        callbackReceive.attach(object, callback);
-    }
-
+public:
     void transferDoneTask(uint32_t txLength, uint32_t rxLength);
     void transferArmedTask(void);
 
@@ -100,14 +64,11 @@ private:
 
     state_t state;
 
-    bool internalSendTask(BlockStatic* block);
+    virtual bool internalSendTask(uint16_t port, BlockStatic* block);
 
-    void sendCommandTask(uint32_t length);
+    void sendCommandTask(uint16_t port, uint32_t length);
 
-
-
-    FunctionPointer0<void>                          callbackSend;
-    FunctionPointer1<void, SharedPointer<Block> >   callbackReceive;
+    uint16_t callbackPort;
 
     SharedPointer<Block> receiveBlock;
     BlockStatic* sendBlock;
