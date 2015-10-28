@@ -20,7 +20,7 @@
  * limitations under the License.
  */
 
-#include "mbed.h"
+#include "mbed-drivers/mbed.h"
 #include "ble/BLE.h"
 
 #include "message-center-transport/MessageCenterSPISlave.h"
@@ -52,7 +52,7 @@ static InterruptIn button2(BUTTON2);
 static DigitalOut led1(LED1);
 static Ticker ticker;
 
-void receivedBlock(uint16_t port, SharedPointer<Block> block)
+void receivedBlock(uint16_t port, SharedPointer<BlockStatic> block)
 {
     printf("main:received: %p\r\n", &(block->at(0)));
     printf("%u : ", port);
@@ -68,16 +68,9 @@ void receivedBlock(uint16_t port, SharedPointer<Block> block)
 /* Buttons                                                                   */
 /*****************************************************************************/
 
-int32_t counter = 0;
-
 void sendDone()
 {
     printf("send done\r\n");
-
-    if (--counter > 0)
-    {
-        transport.sendTask(&block, sendDone);
-    }
 }
 
 void button1Task()
@@ -89,9 +82,7 @@ void button1Task()
         block.at(idx) = idx;
     }
 
-    counter = 1;
-
-    transport.sendTask(1234, &block, sendDone);
+    transport.sendTask(1234, block, sendDone);
 }
 
 void button1ISR()
@@ -99,9 +90,21 @@ void button1ISR()
     minar::Scheduler::postCallback(button1Task);
 }
 
-void button2ISR()
+void button2Task()
 {
     printf("button 2\r\n");
+
+    for (std::size_t idx = 0; idx < block.getMaxLength(); idx++)
+    {
+        block.at(idx) = idx;
+    }
+
+    transport.sendTask(123, block, sendDone);
+}
+
+void button2ISR()
+{
+    minar::Scheduler::postCallback(button2Task);
 }
 
 /*****************************************************************************/

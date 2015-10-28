@@ -64,14 +64,14 @@ private:
 
     state_t state;
 
-    virtual bool internalSendTask(uint16_t port, BlockStatic* block);
+    virtual bool internalSendTask(uint16_t port, BlockStatic& block);
 
     void sendCommandTask(uint16_t port, uint32_t length);
 
     uint16_t callbackPort;
 
-    SharedPointer<Block> receiveBlock;
-    BlockStatic* sendBlock;
+    SharedPointer<BlockStatic> receiveBlock;
+    BlockStatic sendBlock;
 };
 
 #endif // __MESSAGE_CENTER_SPI_SLAVE_H__

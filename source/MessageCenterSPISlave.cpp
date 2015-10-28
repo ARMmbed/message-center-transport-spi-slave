@@ -94,7 +94,7 @@ MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName
         irqPin(irq),
         state(STATE_IDLE),
         callbackPort(0),
-        sendBlock(NULL)
+        sendBlock()
 {
     // default high, active low
     irqPin = 1;
@@ -142,51 +142,49 @@ MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName
 /* Send                                                                      */
 /*****************************************************************************/
 
-bool MessageCenterSPISlave::internalSendTask(uint16_t port, BlockStatic* block)
+bool MessageCenterSPISlave::internalSendTask(uint16_t port, BlockStatic& block)
 {
     DigitalIn cs(csPin);
 
     bool result = false;
 
-    if (block)
+    // begin critical section
     {
-        // begin critical section
+        CriticalSectionLock lock;
+
+        if ((state == STATE_IDLE) &&
+            (cs == 1))
         {
-            CriticalSectionLock lock;
+            // set new state
+            state = STATE_SEND_ARM_COMMAND;
 
-            if ((state == STATE_IDLE) &&
-                (cs == 1))
-            {
-                // set new state
-                state = STATE_SEND_ARM_COMMAND;
+            // signal SPI master that slave has control
+            irqPin = 0;
 
-                // signal SPI master that slave has control
-                irqPin = 0;
-
-                // SPI acquired successfully
-                result = true;
-            }
+            // SPI acquired successfully
+            result = true;
         }
-        // end critical section
+    }
+    // end critical section
 
-        //
-        if (result)
+    //
+    if (result)
+    {
+        // copy block
+        sendBlock = block;
+
+        // check and set length
+        uint32_t length = sendBlock.getLength();
+
+        if (length > SPIS_MAX_MESSAGE_SIZE)
         {
-            // check and set length
-            uint32_t length = block->getLength();
-
-            if (length > SPIS_MAX_MESSAGE_SIZE)
-            {
-                length = SPIS_MAX_MESSAGE_SIZE;
-            }
-
-            // store pointer
-            sendBlock = block;
-
-            // send read command to master
-            FunctionPointer2<void, uint16_t, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
-            minar::Scheduler::postCallback(fp.bind(port, length));
+            length = SPIS_MAX_MESSAGE_SIZE;
+            sendBlock.setLength(length);
         }
+
+        // send read command to master
+        FunctionPointer2<void, uint16_t, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
+        minar::Scheduler::postCallback(fp.bind(port, length));
     }
 
     return result;
@@ -226,7 +224,7 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         state = STATE_SEND_ARM_MESSAGE;
 
         // re-arm buffers
-        spi_slave_buffers_set(sendBlock->getData(), cmdRxBuffer, sendBlock->getLength(), SPIS_COMMAND_SIZE);
+        spi_slave_buffers_set(sendBlock.getData(), cmdRxBuffer, sendBlock.getLength(), SPIS_COMMAND_SIZE);
     }
     // Master has just read the message from the Slave
     else if ((state == STATE_SEND_MESSAGE) && (rxLength > 0))
@@ -254,7 +252,7 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
 
         // setup rx buffer
         uint8_t* rxBuffer = (uint8_t*) malloc(length);
-        receiveBlock = SharedPointer<Block>(new BlockDynamic(rxBuffer, length));
+        receiveBlock = SharedPointer<BlockStatic>(new BlockDynamic(rxBuffer, length));
 
         // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, rxBuffer, 1, length);
@@ -272,7 +270,7 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         }
 
         // clear reference to shared block
-        receiveBlock = SharedPointer<Block>();
+        receiveBlock = SharedPointer<BlockStatic>();
 
         // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
