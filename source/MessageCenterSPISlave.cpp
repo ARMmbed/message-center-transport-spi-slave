@@ -19,10 +19,9 @@
 
 #include "core-util/CriticalSectionLock.h"
 
-
 #define VERBOSE_DEBUG_OUTPUT 0
 
-#if 1
+#if 0
 #define DEBUG_OUT(...) { printf(__VA_ARGS__); }
 #else
 #define DEBUG_OUT(...) /* nothing */
@@ -35,7 +34,6 @@
 #define SPIS_COMMAND_SIZE 0x06
 static uint8_t cmdTxBuffer[SPIS_COMMAND_SIZE] = {0};
 static uint8_t cmdRxBuffer[SPIS_COMMAND_SIZE] = {0};
-
 
 /*****************************************************************************/
 /* IRQ handler                                                               */
@@ -53,7 +51,9 @@ static void bridgeEventHandlerIRQ(spi_slave_evt_t event)
             {
                 if (bridge)
                 {
-                    minar::Scheduler::postCallback(bridge, &MessageCenterSPISlave::transferArmedTask);
+                    minar::Scheduler::postCallback(bridge, &MessageCenterSPISlave::transferArmedTask)
+                        .delay(minar::milliseconds(2 * MessageCenterTransport::MinimumIRQDelay))
+                        .tolerance(0);
                 }
             }
             break;

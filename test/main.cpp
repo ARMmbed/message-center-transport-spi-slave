@@ -25,12 +25,19 @@
 
 #include "message-center-transport/MessageCenterSPISlave.h"
 
-
+#if defined(TARGET_LIKE_COFFEE_NRF51)
+#define SPIS_MOSI_PIN  YOTTA_CFG_HARDWARE_PINS_SPIS_PSELMOSI    // SPI MOSI signal.
+#define SPIS_MISO_PIN  YOTTA_CFG_HARDWARE_PINS_SPIS_PSELMISO    // SPI MISO signal.
+#define SPIS_SCK_PIN   YOTTA_CFG_HARDWARE_PINS_SPIS_PSELSCK    // SPI SCK signal.
+#define SPIS_CSN_PIN   YOTTA_CFG_HARDWARE_PINS_SPIS_PSELSS    // SPI CSN signal.
+#define SPIS_IRQ_PIN   YOTTA_CFG_HARDWARE_PINS_SPIS_PSELIRQ    // IRQ signal.
+#else
 #define SPIS_MOSI_PIN  P0_1    // SPI MOSI signal.
 #define SPIS_MISO_PIN  P0_2    // SPI MISO signal.
 #define SPIS_SCK_PIN   P0_3    // SPI SCK signal.
 #define SPIS_CSN_PIN   P0_4    // SPI CSN signal.
 #define SPIS_IRQ_PIN   P0_5    // IRQ signal.
+#endif
 
 static spi_slave_config_t spi_slave_config = {
     .pin_miso         = SPIS_MISO_PIN,
@@ -82,7 +89,7 @@ void button1Task()
         block.at(idx) = idx;
     }
 
-    transport.sendTask(1234, block, sendDone);
+    transport.sendTask(0x0100, block, sendDone);
 }
 
 void button1ISR()
@@ -99,7 +106,7 @@ void button2Task()
         block.at(idx) = idx;
     }
 
-    transport.sendTask(123, block, sendDone);
+    transport.sendTask(0x0100, block, sendDone);
 }
 
 void button2ISR()
