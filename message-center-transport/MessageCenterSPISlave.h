@@ -67,11 +67,14 @@ private:
     virtual bool internalSendTask(uint16_t port, BlockStatic& block);
 
     void sendCommandTask(uint16_t port, uint32_t length);
+    void timeoutTask();
 
     uint16_t callbackPort;
 
     SharedPointer<BlockStatic> receiveBlock;
     BlockStatic sendBlock;
+
+    minar::callback_handle_t timeoutHandle;
 };
 
 #endif // __MESSAGE_CENTER_SPI_SLAVE_H__

@@ -30,6 +30,8 @@
 #define DEF_CHARACTER 0xFF             /**< SPI default character. Character clocked out in case of an ignored transaction. */
 #define ORC_CHARACTER 0xEE             /**< SPI over-read character. Character clocked out after an over-read of the transmit buffer. */
 
+#define TIMEOUT_IN_MS 500
+
 #define SPIS_MAX_MESSAGE_SIZE 0xFF
 #define SPIS_COMMAND_SIZE 0x06
 static uint8_t cmdTxBuffer[SPIS_COMMAND_SIZE] = {0};
@@ -94,7 +96,8 @@ MessageCenterSPISlave::MessageCenterSPISlave(spi_slave_config_t& config, PinName
         irqPin(irq),
         state(STATE_IDLE),
         callbackPort(0),
-        sendBlock()
+        sendBlock(),
+        timeoutHandle(NULL)
 {
     // default high, active low
     irqPin = 1;
@@ -185,6 +188,11 @@ bool MessageCenterSPISlave::internalSendTask(uint16_t port, BlockStatic& block)
         // send read command to master
         FunctionPointer2<void, uint16_t, uint32_t> fp(this, &MessageCenterSPISlave::sendCommandTask);
         minar::Scheduler::postCallback(fp.bind(port, length));
+
+        // set timeout
+        timeoutHandle = minar::Scheduler::postCallback(this, &MessageCenterSPISlave::timeoutTask)
+                            .delay(minar::milliseconds(TIMEOUT_IN_MS))
+                            .getHandle();
     }
 
     return result;
@@ -237,8 +245,6 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
     // Slave has just received command from Master
     else if ((state == STATE_IDLE) && (rxLength > 0))
     {
-        state = STATE_RECEIVE_ARMING;
-
         // get length
         uint32_t length;
         length = cmdRxBuffer[3];
@@ -246,16 +252,31 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
         length = (length << 8) | cmdRxBuffer[1];
         length = (length << 8) | cmdRxBuffer[0];
 
-        // store port
-        callbackPort = cmdRxBuffer[5];
-        callbackPort = (callbackPort << 8) | cmdRxBuffer[4];
+        if (length <= SPIS_MAX_MESSAGE_SIZE)
+        {
+            state = STATE_RECEIVE_ARMING;
 
-        // setup rx buffer
-        uint8_t* rxBuffer = (uint8_t*) malloc(length);
-        receiveBlock = SharedPointer<BlockStatic>(new BlockDynamic(rxBuffer, length));
+            // store port
+            callbackPort = cmdRxBuffer[5];
+            callbackPort = (callbackPort << 8) | cmdRxBuffer[4];
 
-        // re-arm buffers
-        spi_slave_buffers_set(cmdTxBuffer, rxBuffer, 1, length);
+            // setup rx buffer
+            uint8_t* rxBuffer = (uint8_t*) malloc(length);
+            receiveBlock = SharedPointer<BlockStatic>(new BlockDynamic(rxBuffer, length));
+
+            // re-arm buffers
+            spi_slave_buffers_set(cmdTxBuffer, rxBuffer, 1, length);
+
+            // set timeout
+            timeoutHandle = minar::Scheduler::postCallback(this, &MessageCenterSPISlave::timeoutTask)
+                                .delay(minar::milliseconds(TIMEOUT_IN_MS))
+                                .getHandle();
+        }
+        else
+        {
+            // wrong length - reset and re-arm buffers
+            spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
+        }
     }
     // Slave has just received message from Master
     else if ((state == STATE_RECEIVE_READY) && (rxLength > 0))
@@ -271,6 +292,10 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
 
         // clear reference to shared block
         receiveBlock = SharedPointer<BlockStatic>();
+
+        // cancel timeout
+        minar::Scheduler::cancelCallback(timeoutHandle);
+        timeoutHandle = NULL;
 
         // re-arm buffers
         spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
@@ -313,6 +338,10 @@ void MessageCenterSPISlave::transferArmedTask()
     {
         state = STATE_IDLE;
 
+        // cancel timeout
+        minar::Scheduler::cancelCallback(timeoutHandle);
+        timeoutHandle = NULL;
+
         if (callbackSend)
         {
             minar::Scheduler::postCallback(callbackSend);
@@ -341,6 +370,17 @@ void MessageCenterSPISlave::transferArmedTask()
         // unknown state, clear IRQ by setting it high
         irqPin = 1;
     }
+}
+
+void MessageCenterSPISlave::timeoutTask()
+{
+    state = STATE_IDLE_ARM;
+
+    // clear tx buffer
+    cmdTxBuffer[0] = ORC_CHARACTER;
+
+    // re-arm buffers
+    spi_slave_buffers_set(cmdTxBuffer, cmdRxBuffer, 1, SPIS_COMMAND_SIZE);
 }
 
 void MessageCenterSPISlave::printTask(const char* str)
