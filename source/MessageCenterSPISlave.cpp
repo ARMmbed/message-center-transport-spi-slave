@@ -30,8 +30,6 @@
 #define DEF_CHARACTER 0xFF             /**< SPI default character. Character clocked out in case of an ignored transaction. */
 #define ORC_CHARACTER 0xEE             /**< SPI over-read character. Character clocked out after an over-read of the transmit buffer. */
 
-#define TIMEOUT_IN_MS 500
-
 #define SPIS_MAX_MESSAGE_SIZE 0xFF
 #define SPIS_COMMAND_SIZE 0x06
 static uint8_t cmdTxBuffer[SPIS_COMMAND_SIZE] = {0};
@@ -191,7 +189,7 @@ bool MessageCenterSPISlave::internalSendTask(uint16_t port, BlockStatic& block)
 
         // set timeout
         timeoutHandle = minar::Scheduler::postCallback(this, &MessageCenterSPISlave::timeoutTask)
-                            .delay(minar::milliseconds(TIMEOUT_IN_MS))
+                            .delay(minar::milliseconds(MessageCenterTransport::TimeoutInMs))
                             .getHandle();
     }
 
@@ -269,7 +267,7 @@ void MessageCenterSPISlave::transferDoneTask(uint32_t txLength, uint32_t rxLengt
 
             // set timeout
             timeoutHandle = minar::Scheduler::postCallback(this, &MessageCenterSPISlave::timeoutTask)
-                                .delay(minar::milliseconds(TIMEOUT_IN_MS))
+                                .delay(minar::milliseconds(MessageCenterTransport::TimeoutInMs))
                                 .getHandle();
         }
         else
